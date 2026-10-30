@@ -593,8 +593,18 @@ export function ApplyInputHandlers() {
     let pasteKey = null;
     let pasteFallbackTimer = null;
     const altGrChars = new Set();
+    let remoteShiftDown = false;
     const isEditableFocused = () => !!(document.querySelector("input:focus") ||
         document.querySelector("textarea:focus"));
+    // Sous Linux, après une touche morte, le navigateur ne déclenche aucun keyup
+    // (ni celui de la touche morte, ni celui de Shift) : Shift resterait enfoncé
+    // côté distant. L'événement suivant indique son état réel.
+    const releaseStuckShift = async (e) => {
+        if (remoteShiftDown && !e.shiftKey) {
+            remoteShiftDown = false;
+            await ViewerApp.MessageSender.SendKeyUp("Shift");
+        }
+    };
     const sendPasteKey = async () => {
         if (pasteFallbackTimer) {
             window.clearTimeout(pasteFallbackTimer);
@@ -633,6 +643,7 @@ export function ApplyInputHandlers() {
         if (ViewerApp.ViewOnlyMode) {
             return;
         }
+        const shiftRelease = releaseStuckShift(e);
         if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() == "v") {
             // Pas de preventDefault : sinon le navigateur ne déclenche pas "paste".
             if (!e.repeat) {
@@ -645,6 +656,7 @@ export function ApplyInputHandlers() {
         if (!e.ctrlKey || !e.shiftKey || e.key.toLowerCase() != "i") {
             e.preventDefault();
         }
+        await shiftRelease;
         // AltGr (AZERTY : @ # { [ | ` \ ^ ] } €) arrive côté distant comme Ctrl + Alt,
         // que l'agent ne sait pas rejouer (VkKeyScan renvoie les modificateurs dans
         // l'octet haut). On relâche Ctrl côté distant et on tape le caractère en Unicode.
@@ -660,6 +672,9 @@ export function ApplyInputHandlers() {
             return;
         }
         ViewerApp.ClipboardWatcher.FlushPendingText();
+        if (e.key === "Shift") {
+            remoteShiftDown = true;
+        }
         await ViewerApp.MessageSender.SendKeyDown(e.key);
     });
     window.addEventListener("keyup", async function (e) {
@@ -669,6 +684,12 @@ export function ApplyInputHandlers() {
         e.preventDefault();
         if (ViewerApp.ViewOnlyMode) {
             return;
+        }
+        if (e.key === "Shift") {
+            remoteShiftDown = false;
+        }
+        else {
+            await releaseStuckShift(e);
         }
         if (pasteKey && e.key.toLowerCase() == "v") {
             // La touche sera envoyée (down + up) une fois le texte collé.
@@ -690,6 +711,7 @@ export function ApplyInputHandlers() {
         if (ViewerApp.ViewOnlyMode) {
             return;
         }
+        remoteShiftDown = false;
         await ViewerApp.MessageSender.SendSetKeyStatesUp();
     });
     window.addEventListener("touchstart", () => {
